@@ -9,7 +9,7 @@ warnings.filterwarnings('ignore')
 
 # Set page configuration
 st.set_page_config(
-    page_title="Advanced CSV File Analyzer",
+    page_title="Advanced Data Analysis Platform",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -61,6 +61,13 @@ st.markdown("""
         margin: 5px 0;
         border-left: 4px solid #dc3545;
     }
+    .analysis-section {
+        background-color: #f8f9fa;
+        padding: 20px;
+        border-radius: 10px;
+        margin: 10px 0;
+        border: 1px solid #dee2e6;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -79,6 +86,13 @@ def detect_semantic_issues(df):
                 unique_ratio = df[col].nunique() / len(df)
                 if unique_ratio > 0.8:
                     issues.append(f"High cardinality in semantic column '{col}': {df[col].nunique()} unique values")
+                
+        # Check for columns with mixed data types
+        if df[col].dtype == 'object':
+            # Check for potential numeric data stored as text
+            numeric_count = pd.to_numeric(df[col], errors='coerce').notna().sum()
+            if numeric_count > 0 and numeric_count < len(df):
+                issues.append(f"Mixed data types in column '{col}': contains both text and numeric data")
     
     return issues
 
@@ -106,6 +120,11 @@ def detect_manipulation_patterns(df):
                 # Simple Benford's law check
                 if actual_proportions.get(1, 0) < 0.25:
                     patterns.append(f"Column '{col}' shows potential Benford's Law deviation")
+        
+        # Check for unusual value distributions
+        skewness = df[col].skew()
+        if abs(skewness) > 2:
+            patterns.append(f"Column '{col}' has high skewness ({skewness:.2f}) - possible manipulation")
     
     return patterns
 
@@ -117,22 +136,27 @@ def detect_clickbait_patterns(df):
     clickbait_keywords = [
         'shocking', 'amazing', 'unbelievable', 'secret', 'revealed', 
         'you wont believe', 'what happened next', 'goes viral',
-        'everyone is talking about', 'breaking', 'urgent'
+        'everyone is talking about', 'breaking', 'urgent', 'must see',
+        'will blow your mind', 'this is why', 'the truth about'
     ]
     
     for col in text_columns:
         # Sample some text data for analysis
         sample_texts = df[col].dropna().head(100)
+        clickbait_count = 0
         
         for text in sample_texts:
             if isinstance(text, str):
                 text_lower = text.lower()
                 for keyword in clickbait_keywords:
                     if keyword in text_lower:
-                        clickbait_indicators.append(f"Potential clickbait language in '{col}': contains '{keyword}'")
+                        clickbait_count += 1
                         break
+        
+        if clickbait_count > 0:
+            clickbait_indicators.append(f"Column '{col}': {clickbait_count} instances of clickbait language detected")
     
-    return list(set(clickbait_indicators))[:5]  # Return top 5 unique indicators
+    return clickbait_indicators
 
 def detect_satire_indicators(df):
     """Detect potential satire indicators"""
@@ -141,16 +165,20 @@ def detect_satire_indicators(df):
     
     satire_keywords = [
         'satire', 'parody', 'humor', 'comedy', 'joke', 'not real',
-        'fictional', 'fake news', 'entertainment purposes'
+        'fictional', 'fake news', 'entertainment purposes', 'just kidding',
+        'for fun', 'not actual', 'made up'
     ]
     
     extreme_value_indicators = [
         'absolutely', 'completely', 'totally', 'utterly', '100%', 
-        'worst ever', 'best ever', 'never before', 'unprecedented'
+        'worst ever', 'best ever', 'never before', 'unprecedented',
+        'literally', 'insanely', 'ridiculously'
     ]
     
     for col in text_columns:
         sample_texts = df[col].dropna().head(50)
+        satire_count = 0
+        extreme_count_total = 0
         
         for text in sample_texts:
             if isinstance(text, str):
@@ -159,19 +187,24 @@ def detect_satire_indicators(df):
                 # Check for explicit satire disclaimers
                 for keyword in satire_keywords:
                     if keyword in text_lower:
-                        satire_signals.append(f"Explicit satire indicator in '{col}': '{keyword}'")
+                        satire_count += 1
                         break
                 
                 # Check for extreme language
                 extreme_count = sum(1 for word in extreme_value_indicators if word in text_lower)
-                if extreme_count >= 3:
-                    satire_signals.append(f"Extreme language pattern in '{col}' - potential satire")
+                extreme_count_total += extreme_count
+        
+        if satire_count > 0:
+            satire_signals.append(f"Column '{col}': {satire_count} explicit satire indicators found")
+        
+        if extreme_count_total > 10:
+            satire_signals.append(f"Column '{col}': High use of extreme language ({extreme_count_total} instances) - potential satire")
     
-    return list(set(satire_signals))[:5]
+    return satire_signals
 
 def main():
     # Header
-    st.markdown('<h1 class="main-header">Advanced CSV Data Analysis Platform</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">Advanced Data Analysis Platform</h1>', unsafe_allow_html=True)
     
     # File upload section
     st.markdown('<h2 class="section-header">Data File Upload</h2>', unsafe_allow_html=True)
@@ -191,13 +224,12 @@ def main():
             st.success(f"File successfully loaded! Dataset contains {df.shape[0]:,} records and {df.shape[1]:,} attributes")
             
             # Create tabs for different analyses
-            tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+            tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
                 "Data Overview", 
                 "Data Quality", 
                 "Statistical Analysis", 
                 "Data Visualizations",
                 "Content Analysis",
-                "Advanced Insights",
                 "Export Results"
             ])
             
@@ -217,9 +249,6 @@ def main():
                 display_content_analysis(df)
                 
             with tab6:
-                display_advanced_insights(df)
-                
-            with tab7:
                 display_export_options(df)
                 
         except Exception as e:
@@ -458,112 +487,70 @@ def display_visualizations(df):
 def display_content_analysis(df):
     st.markdown('<h2 class="section-header">Content Pattern Analysis</h2>', unsafe_allow_html=True)
     
-    # Run all detection functions
-    semantic_issues = detect_semantic_issues(df)
-    manipulation_patterns = detect_manipulation_patterns(df)
-    clickbait_indicators = detect_clickbait_patterns(df)
-    satire_indicators = detect_satire_indicators(df)
+    # Analysis type selection
+    analysis_type = st.selectbox(
+        "Select Content Analysis Type:",
+        [
+            "Select an analysis type...",
+            "Semantic Analysis",
+            "Data Manipulation Detection", 
+            "Clickbait Language Detection",
+            "Satire and Extreme Language Analysis"
+        ]
+    )
     
-    # Display results in expandable sections
-    with st.expander("Semantic Analysis Results", expanded=True):
-        if semantic_issues:
-            for issue in semantic_issues:
-                st.markdown(f'<div class="insight-warning">{issue}</div>', unsafe_allow_html=True)
-        else:
-            st.info("No significant semantic issues detected")
+    if analysis_type == "Select an analysis type...":
+        st.info("Please select an analysis type from the dropdown above to begin content analysis.")
+        return
     
-    with st.expander("Data Manipulation Indicators"):
-        if manipulation_patterns:
-            for pattern in manipulation_patterns:
-                st.markdown(f'<div class="insight-danger">{pattern}</div>', unsafe_allow_html=True)
-        else:
-            st.info("No obvious data manipulation patterns detected")
+    st.markdown(f'<div class="analysis-section">', unsafe_allow_html=True)
+    st.subheader(f"Running {analysis_type}")
     
-    with st.expander("Clickbait Language Detection"):
-        if clickbait_indicators:
-            for indicator in clickbait_indicators:
-                st.markdown(f'<div class="insight-warning">{indicator}</div>', unsafe_allow_html=True)
-        else:
-            st.info("No clickbait language patterns detected")
-    
-    with st.expander("Satire and Extreme Language Analysis"):
-        if satire_indicators:
-            for indicator in satire_indicators:
-                st.markdown(f'<div class="insight-warning">{indicator}</div>', unsafe_allow_html=True)
-        else:
-            st.info("No satire indicators or extreme language patterns detected")
-
-def display_advanced_insights(df):
-    st.markdown('<h2 class="section-header">Advanced Data Insights</h2>', unsafe_allow_html=True)
-    
-    numerical_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
-    
-    insights = []
-    
-    # Data quality insights
-    missing_cols = df.columns[df.isnull().any()].tolist()
-    if missing_cols:
-        insights.append(('warning', f"Data Quality Alert: {len(missing_cols)} attributes contain missing values requiring attention"))
-    
-    if df.duplicated().sum() > 0:
-        insights.append(('danger', f"Data Integrity Issue: {df.duplicated().sum()} duplicate records identified"))
-    
-    # Numerical insights
-    for col in numerical_cols:
-        if df[col].nunique() == 1:
-            insights.append(('warning', f"Constant Value Attribute: '{col}' contains only a single unique value"))
+    # Run the selected analysis
+    if analysis_type == "Semantic Analysis":
+        results = detect_semantic_issues(df)
+        st.write("**Analysis Description:** Detects semantic issues in data including high cardinality text columns and mixed data types.")
         
-        # Check for potential outliers using IQR
-        Q1 = df[col].quantile(0.25)
-        Q3 = df[col].quantile(0.75)
-        IQR = Q3 - Q1
-        if IQR > 0:  # Avoid division by zero
-            outliers = df[(df[col] < (Q1 - 1.5 * IQR)) | (df[col] > (Q3 + 1.5 * IQR))].shape[0]
-            if outliers > 0:
-                insights.append(('warning', f"Statistical Outliers: '{col}' contains {outliers} potential outlier values"))
+    elif analysis_type == "Data Manipulation Detection":
+        results = detect_manipulation_patterns(df)
+        st.write("**Analysis Description:** Identifies potential data manipulation patterns including rounded values, Benford's Law violations, and unusual distributions.")
+        
+    elif analysis_type == "Clickbait Language Detection":
+        results = detect_clickbait_patterns(df)
+        st.write("**Analysis Description:** Scans text content for sensational language and clickbait patterns commonly used in attention-grabbing content.")
+        
+    elif analysis_type == "Satire and Extreme Language Analysis":
+        results = detect_satire_indicators(df)
+        st.write("**Analysis Description:** Detects satire indicators, extreme language patterns, and potential parody content.")
     
-    # Categorical insights
-    for col in categorical_cols:
-        unique_count = df[col].nunique()
-        if unique_count == len(df):
-            insights.append(('positive', f"Unique Identifier: '{col}' appears to function as a unique record identifier"))
-        elif unique_count == 1:
-            insights.append(('warning', f"Uniform Category: '{col}' contains only a single category value"))
-        elif unique_count < 10:
-            insights.append(('positive', f"Low Cardinality: '{col}' has manageable {unique_count} unique categories"))
-    
-    # Display insights
-    if insights:
-        st.subheader("Key Analytical Findings")
-        for insight_type, insight in insights:
-            if insight_type == 'positive':
-                st.markdown(f'<div class="insight-positive">{insight}</div>', unsafe_allow_html=True)
-            elif insight_type == 'warning':
-                st.markdown(f'<div class="insight-warning">{insight}</div>', unsafe_allow_html=True)
+    # Display results
+    if results:
+        st.subheader("Analysis Results")
+        for result in results:
+            if "potential" in result.lower() or "deviation" in result.lower() or "high" in result.lower():
+                st.markdown(f'<div class="insight-warning">{result}</div>', unsafe_allow_html=True)
+            elif "error" in result.lower() or "missing" in result.lower() or "invalid" in result.lower():
+                st.markdown(f'<div class="insight-danger">{result}</div>', unsafe_allow_html=True)
             else:
-                st.markdown(f'<div class="insight-danger">{insicontinueght}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="insight-positive">{result}</div>', unsafe_allow_html=True)
+        
+        st.metric("Total Findings", len(results))
     else:
-        st.info("No significant analytical insights detected. The dataset appears well-structured.")
+        st.success("No issues detected in this analysis. The data appears normal for the selected analysis type.")
     
-    # Data summary
-    st.subheader("Dataset Summary")
-    col1, col2, col3 = st.columns(3)
+    st.markdown('</div>', unsafe_allow_html=True)
     
-    with col1:
-        st.write("**Dataset Structure**")
-        st.write(f"Total Records: {df.shape[0]:,}")
-        st.write(f"Total Attributes: {df.shape[1]}")
-    
-    with col2:
-        st.write("**Data Composition**")
-        st.write(f"Numerical Attributes: {len(numerical_cols)}")
-        st.write(f"Categorical Attributes: {len(categorical_cols)}")
-    
-    with col3:
-        st.write("**Quality Metrics**")
-        st.write(f"Missing Values: {df.isnull().sum().sum()}")
-        st.write(f"Duplicate Records: {df.duplicated().sum()}")
+    # Show quick statistics about the analysis
+    if results:
+        st.subheader("Analysis Summary")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Analysis Type", analysis_type)
+        with col2:
+            st.metric("Columns Analyzed", len(df.columns))
+        with col3:
+            st.metric("Issues Found", len(results))
 
 def display_export_options(df):
     st.markdown('<h2 class="section-header">Analysis Results Export</h2>', unsafe_allow_html=True)
