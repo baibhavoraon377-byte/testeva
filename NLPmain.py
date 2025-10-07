@@ -15,7 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for clean styling
+# Custom CSS for clean styling with better text colors
 st.markdown("""
 <style>
     .main-header {
@@ -48,25 +48,28 @@ st.markdown("""
         margin: 0.3rem 0;
         border-radius: 5px;
         border-left: 4px solid;
-        background: #f8f9fa;
-        color: #2c3e50;
         font-size: 0.95rem;
+        color: #2c3e50;
     }
     .result-high {
         border-left-color: #e74c3c;
         background: #fdEDEC;
+        color: #c0392b;
     }
     .result-medium {
         border-left-color: #f39c12;
         background: #fef5e7;
+        color: #d35400;
     }
     .result-low {
         border-left-color: #27ae60;
         background: #eafaf1;
+        color: #27ae60;
     }
     .result-info {
         border-left-color: #3498db;
         background: #ebf5fb;
+        color: #2980b9;
     }
     .metric-box {
         background: #f8f9fa;
@@ -74,6 +77,17 @@ st.markdown("""
         border-radius: 6px;
         text-align: center;
         border: 1px solid #e9ecef;
+        color: #2c3e50;
+    }
+    .issue-count {
+        font-size: 1.2rem;
+        font-weight: bold;
+        color: #2c3e50;
+    }
+    .analysis-title {
+        color: #2c3e50;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -85,7 +99,7 @@ def detect_semantic_issues(df):
     for col in df.columns:
         col_lower = str(col).lower()
         
-        # Detect potential semantic columns
+        # Detect potential semantic columns with high cardinality
         semantic_keywords = ['name', 'title', 'description', 'comment', 'note', 'label', 'category', 'type']
         if any(keyword in col_lower for keyword in semantic_keywords):
             if df[col].dtype == 'object':
@@ -93,17 +107,32 @@ def detect_semantic_issues(df):
                 if unique_ratio > 0.8:
                     issues.append({
                         'type': 'high',
-                        'message': f"High cardinality in semantic column '{col}': {df[col].nunique()} unique values found"
+                        'message': f"High cardinality in semantic column '{col}': {df[col].nunique()} unique values found ({unique_ratio:.1%} of data)",
+                        'column': col,
+                        'value': f"{unique_ratio:.1%}"
                     })
         
         # Check for mixed data types
         if df[col].dtype == 'object':
             numeric_count = pd.to_numeric(df[col], errors='coerce').notna().sum()
             if numeric_count > 0 and numeric_count < len(df):
+                mixed_ratio = numeric_count / len(df)
                 issues.append({
                     'type': 'medium',
-                    'message': f"Mixed data types in '{col}': Contains both text and numeric values"
+                    'message': f"Mixed data types in '{col}': Contains {numeric_count} numeric values among text data ({mixed_ratio:.1%})",
+                    'column': col,
+                    'value': f"{mixed_ratio:.1%}"
                 })
+        
+        # Check for columns with mostly empty values
+        empty_ratio = df[col].isnull().sum() / len(df)
+        if empty_ratio > 0.7:
+            issues.append({
+                'type': 'medium',
+                'message': f"Mostly empty column '{col}': {empty_ratio:.1%} of values are missing",
+                'column': col,
+                'value': f"{empty_ratio:.1%}"
+            })
     
     return issues
 
@@ -120,7 +149,9 @@ def detect_manipulation_patterns(df):
         if rounded_ratio > 0.9:
             patterns.append({
                 'type': 'medium',
-                'message': f"Rounded values in '{col}': {rounded_ratio:.1%} of values are rounded"
+                'message': f"Rounded values in '{col}': {rounded_ratio:.1%} of values are rounded integers",
+                'column': col,
+                'value': f"{rounded_ratio:.1%}"
             })
         
         # Check skewness
@@ -129,7 +160,20 @@ def detect_manipulation_patterns(df):
             if abs(skewness) > 2:
                 patterns.append({
                     'type': 'high',
-                    'message': f"High skewness in '{col}': Value = {skewness:.2f} (potential outliers)"
+                    'message': f"High skewness in '{col}': Value = {skewness:.2f} (potential outliers or manipulation)",
+                    'column': col,
+                    'value': f"{skewness:.2f}"
+                })
+        
+        # Check for suspicious value clusters
+        if len(df[col].dropna()) > 10:
+            value_counts = df[col].value_counts()
+            if len(value_counts) < 10:  # Few unique values in numerical column
+                patterns.append({
+                    'type': 'low',
+                    'message': f"Limited value range in '{col}': Only {len(value_counts)} unique values",
+                    'column': col,
+                    'value': f"{len(value_counts)}"
                 })
     
     return patterns
@@ -143,31 +187,38 @@ def detect_clickbait_patterns(df):
         'shocking', 'amazing', 'unbelievable', 'secret', 'revealed', 
         'you wont believe', 'what happened next', 'goes viral',
         'everyone is talking about', 'breaking', 'urgent', 'must see',
-        'will blow your mind', 'this is why', 'the truth about'
+        'will blow your mind', 'this is why', 'the truth about',
+        'secret they dont want', 'exposed', 'gone wrong', 'you need to know'
     ]
     
     for col in text_columns:
         sample_texts = df[col].dropna().head(100)
-        clickbait_count = 0
+        clickbait_instances = []
         
         for text in sample_texts:
             if isinstance(text, str):
                 text_lower = text.lower()
                 for keyword in clickbait_keywords:
                     if keyword in text_lower:
-                        clickbait_count += 1
+                        clickbait_instances.append(keyword)
                         break
         
-        if clickbait_count > 5:
-            clickbait_indicators.append({
-                'type': 'high',
-                'message': f"Clickbait language in '{col}': {clickbait_count} instances detected"
-            })
-        elif clickbait_count > 0:
-            clickbait_indicators.append({
-                'type': 'medium',
-                'message': f"Some clickbait language in '{col}': {clickbait_count} instances found"
-            })
+        if clickbait_instances:
+            unique_keywords = set(clickbait_instances)
+            if len(clickbait_instances) > 5:
+                clickbait_indicators.append({
+                    'type': 'high',
+                    'message': f"Clickbait language in '{col}': {len(clickbait_instances)} instances with keywords: {', '.join(list(unique_keywords)[:3])}...",
+                    'column': col,
+                    'value': f"{len(clickbait_instances)}"
+                })
+            else:
+                clickbait_indicators.append({
+                    'type': 'medium',
+                    'message': f"Some clickbait language in '{col}': {len(clickbait_instances)} instances found",
+                    'column': col,
+                    'value': f"{len(clickbait_instances)}"
+                })
     
     return clickbait_indicators
 
@@ -178,18 +229,20 @@ def detect_satire_indicators(df):
     
     satire_keywords = [
         'satire', 'parody', 'humor', 'comedy', 'joke', 'not real',
-        'fictional', 'fake news', 'entertainment purposes', 'just kidding'
+        'fictional', 'fake news', 'entertainment purposes', 'just kidding',
+        'for fun', 'not actual', 'made up', 'humorous', 'comical'
     ]
     
     extreme_indicators = [
         'absolutely', 'completely', 'totally', 'utterly', '100%', 
-        'worst ever', 'best ever', 'never before', 'unprecedented'
+        'worst ever', 'best ever', 'never before', 'unprecedented',
+        'literally', 'insanely', 'ridiculously', 'extremely', 'incredibly'
     ]
     
     for col in text_columns:
         sample_texts = df[col].dropna().head(50)
-        satire_count = 0
-        extreme_count = 0
+        satire_instances = []
+        extreme_instances = []
         
         for text in sample_texts:
             if isinstance(text, str):
@@ -197,24 +250,29 @@ def detect_satire_indicators(df):
                 
                 for keyword in satire_keywords:
                     if keyword in text_lower:
-                        satire_count += 1
+                        satire_instances.append(keyword)
                         break
                 
                 for word in extreme_indicators:
                     if word in text_lower:
-                        extreme_count += 1
+                        extreme_instances.append(word)
         
-        if satire_count > 0:
+        if satire_instances:
             satire_signals.append({
                 'type': 'high',
-                'message': f"Satire indicators in '{col}': {satire_count} explicit markers found"
+                'message': f"Satire indicators in '{col}': {len(satire_instances)} explicit markers found",
+                'column': col,
+                'value': f"{len(satire_instances)}"
             })
         
-        if extreme_count > 10:
-            satire_signals.append({
-                'type': 'medium',
-                'message': f"Extreme language in '{col}': {extreme_count} instances detected"
-            })
+        if extreme_instances:
+            if len(extreme_instances) > 10:
+                satire_signals.append({
+                    'type': 'medium',
+                    'message': f"Extreme language in '{col}': {len(extreme_instances)} instances of exaggerated terms",
+                    'column': col,
+                    'value': f"{len(extreme_instances)}"
+                })
     
     return satire_signals
 
@@ -266,14 +324,14 @@ def display_data_overview(df):
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.markdown(f'<div class="metric-box"><h4>Total Records</h4><h3>{df.shape[0]:,}</h3></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-box"><h4>Total Records</h4><h3 style="color: #2c3e50;">{df.shape[0]:,}</h3></div>', unsafe_allow_html=True)
     with col2:
-        st.markdown(f'<div class="metric-box"><h4>Total Columns</h4><h3>{df.shape[1]}</h3></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-box"><h4>Total Columns</h4><h3 style="color: #2c3e50;">{df.shape[1]}</h3></div>', unsafe_allow_html=True)
     with col3:
-        st.markdown(f'<div class="metric-box"><h4>Missing Values</h4><h3>{df.isnull().sum().sum()}</h3></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-box"><h4>Missing Values</h4><h3 style="color: #2c3e50;">{df.isnull().sum().sum()}</h3></div>', unsafe_allow_html=True)
     with col4:
         mem_usage = df.memory_usage(deep=True).sum() / 1024**2
-        st.markdown(f'<div class="metric-box"><h4>Memory Usage</h4><h3>{mem_usage:.1f} MB</h3></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-box"><h4>Memory Usage</h4><h3 style="color: #2c3e50;">{mem_usage:.1f} MB</h3></div>', unsafe_allow_html=True)
     
     # Data preview
     st.subheader("Data Preview")
@@ -398,15 +456,51 @@ def run_satire_analysis(df):
 def display_analysis_results(title, results, description):
     """Display analysis results in a consistent format"""
     st.markdown('<div class="analysis-card">', unsafe_allow_html=True)
-    st.subheader(title)
+    
+    # Title with issue count
+    if results:
+        st.markdown(f'<div class="analysis-title">{title} - {len(results)} Issues Found</div>', unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div class="analysis-title">{title} - No Issues Found</div>', unsafe_allow_html=True)
+    
     st.write(description)
     
     if results:
-        for result in results:
-            css_class = f"result-{result['type']}"
-            st.markdown(f'<div class="result-item {css_class}">{result["message"]}</div>', unsafe_allow_html=True)
+        # Group by issue type for better organization
+        high_issues = [r for r in results if r['type'] == 'high']
+        medium_issues = [r for r in results if r['type'] == 'medium']
+        low_issues = [r for r in results if r['type'] == 'low']
+        
+        if high_issues:
+            st.write("**High Priority Issues:**")
+            for result in high_issues:
+                st.markdown(f'<div class="result-item result-high">🚨 {result["message"]}</div>', unsafe_allow_html=True)
+        
+        if medium_issues:
+            st.write("**Medium Priority Issues:**")
+            for result in medium_issues:
+                st.markdown(f'<div class="result-item result-medium">⚠️ {result["message"]}</div>', unsafe_allow_html=True)
+        
+        if low_issues:
+            st.write("**Low Priority Issues:**")
+            for result in low_issues:
+                st.markdown(f'<div class="result-item result-low">ℹ️ {result["message"]}</div>', unsafe_allow_html=True)
+        
+        # Show detailed breakdown
+        with st.expander("View Detailed Issue Breakdown"):
+            issue_df = pd.DataFrame([
+                {
+                    'Column': r.get('column', 'N/A'),
+                    'Issue': r['message'],
+                    'Severity': r['type'].title(),
+                    'Value': r.get('value', 'N/A')
+                }
+                for r in results
+            ])
+            st.dataframe(issue_df, use_container_width=True)
+            
     else:
-        st.markdown('<div class="result-item result-info">No issues detected in this analysis</div>', unsafe_allow_html=True)
+        st.markdown('<div class="result-item result-info">✅ No issues detected in this analysis. Your data looks good!</div>', unsafe_allow_html=True)
     
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -415,9 +509,20 @@ def display_analysis_summary(total_findings):
     st.subheader("Analysis Summary")
     
     if total_findings == 0:
-        st.success("No issues detected in the analysis.")
+        st.success("🎉 Excellent! No issues were detected in any of the analyses.")
     else:
-        st.info(f"Found {total_findings} potential issue(s) in the analysis")
+        st.warning(f"🔍 Found {total_findings} potential issue(s) across the analyses")
+        
+        # Show recommendations based on findings
+        if total_findings > 0:
+            st.info("**Recommendations:**")
+            if total_findings <= 5:
+                st.write("- Review the identified issues above")
+                st.write("- Consider data cleaning for high priority items")
+            else:
+                st.write("- Multiple issues detected - comprehensive data review recommended")
+                st.write("- Focus on high priority issues first")
+                st.write("- Consider data validation and quality checks")
 
 if __name__ == "__main__":
     main()
